@@ -23,6 +23,7 @@
 hs_err_pid*
 
 .idea
+conf
 data
 src/main/resources
 target

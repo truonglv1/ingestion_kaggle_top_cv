@@ -50,9 +50,13 @@ public class MongoHandler {
         return documents;
     }
 
+    // insert document
+    public void insertDocument(Document document, String collection){
+        database.getCollection(collection).insertOne(document);
+    }
     public static void main(String[] args) {
         MongoHandler mongoHandler = new MongoHandler();
-//        mongoHandler.getAllDocument(1, 10, "sellers")
-//                .forEach(System.out::println);
+        mongoHandler.getAllDocument(1, 10, "sellers")
+                .forEach(System.out::println);
     }
 }

@@ -1,5 +1,7 @@
 package kaggle.commerce.crawler;
 
+import com.mongodb.spark.MongoSpark;
+import kaggle.commerce.config.Constants;
 import kaggle.commerce.database.MongoHandler;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -17,17 +19,21 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import static org.apache.spark.sql.functions.*;
-import org.apache.spark.sql.types.StructType;
+
+import org.apache.spark.sql.types.DataTypes;
+import org.json.JSONObject;
+import org.quartz.Job;
+import org.quartz.JobExecutionContext;
+import org.quartz.JobExecutionException;
 
 import static org.apache.spark.sql.functions.col;
-import static org.apache.spark.sql.types.DataTypes.StringType;
 
 /*
 * Đọc dữ liệu dataset bằng kaggle API và lưu xuống thư mục data
 * Đẩy dữ liệu vào mongo và kafka
 * */
 
-public class KaggleCrawler {
+public class KaggleCrawler implements Job {
 
     private void crawler(){
         OkHttpClient client = new OkHttpClient().newBuilder()
@@ -54,25 +60,44 @@ public class KaggleCrawler {
         }
     }
 
-    private void readData(SparkSession spark, String dir){
+    private void readData(SparkSession session, String dir){
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(Paths.get(dir))) {
             for (Path path : stream) {
                 if (!Files.isDirectory(path)) {
-                    System.out.println(path.getFileName().toString());
-                    Dataset<Row> df = spark.read().option("header", "true").csv(path.toString());
-                    if (path.getFileName().toString().equals("olist_sellers_dataset.csv")){
-//                        MongoSpark.save(df.write().option("collection", "sellers").mode("overwrite"));
-                        StructType schema = new StructType()
-                                .add("seller_id",StringType)
-                                .add("seller_zip_code_prefix",StringType)
-                                .add("seller_city",StringType)
-                                .add("seller_state",StringType);
+                    Dataset<Row> ds = session.read().option("header", "true").csv(path.toString());
+                    if (path.getFileName().toString().equals("olist_orders_dataset.csv")){
+                        MongoSpark.save(ds.limit(10).write().option("collection", "orders").mode("overwrite"));
 
-                        df.select(col("seller_id").as("key"), col("seller_zip_code_prefix").as("value"))
+                        session.udf().register("toJson", (String order_id, String customer_id, String order_status,
+                                                          String order_purchase_timestamp, String order_approved_at,
+                                                          String order_delivered_carrier_date,
+                                                          String order_delivered_customer_date,
+                                                          String order_estimated_delivery_date)-> {
+                            JSONObject object = new JSONObject();
+                            object.put("order_id", order_id);
+                            object.put("customer_id", customer_id);
+                            object.put("order_status", order_status);
+                            object.put("order_purchase_timestamp", order_purchase_timestamp);
+                            object.put("order_approved_at", order_approved_at);
+                            object.put("order_delivered_carrier_date", order_delivered_carrier_date);
+                            object.put("order_delivered_customer_date", order_delivered_customer_date);
+                            object.put("order_estimated_delivery_date", order_estimated_delivery_date);
+                            return object.toString();
+
+                        }, DataTypes.StringType);
+
+                        ds.limit(100)
+                                .select(col("order_id").as("key"), callUDF("toJson",
+                                        col("order_id"), col("customer_id"),
+                                        col("order_status"),col("order_purchase_timestamp"),
+                                        col("order_approved_at"),col("order_delivered_carrier_date"),
+                                        col("order_delivered_customer_date"),col("order_estimated_delivery_date"))
+                                        .as("value"))
                                 .write()
                                 .format("kafka")
                                 .option("kafka.bootstrap.servers", MongoHandler.host +":9092")
-                                .option("topic", "kaggle")
+                                .option("num.replica.fetchers", "1")
+                                .option("topic", Constants.ORDER_TOPIC)
                                 .save();
                     }
                 }
@@ -82,8 +107,9 @@ public class KaggleCrawler {
         }
     }
 
-    public static void main(String[] args) {
-        SparkSession spark = SparkSession
+    @Override
+    public void execute(JobExecutionContext jobExecutionContext) throws JobExecutionException {
+        SparkSession session = SparkSession
                 .builder()
                 .appName("kaggle")
                 .master("local[*]")
@@ -93,6 +119,6 @@ public class KaggleCrawler {
                 .getOrCreate();
 
         KaggleCrawler kaggleCrawler = new KaggleCrawler();
-        kaggleCrawler.readData(spark, "data");
+        kaggleCrawler.readData(session, "data");
     }
 }
