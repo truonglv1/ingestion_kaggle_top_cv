@@ -63,9 +63,11 @@ public class IngestionData {
 					.mapPartitions(f->{
 						while (f.hasNext()){
 							MongoHandler mongoHandler = new MongoHandler();
+							JSONObject object = new JSONObject(f.next()._2);
 							Document document = new Document();
-							document.append("id", f.next()._1);
-							document.append("id", f.next()._1);
+							document.append("order_id", f.next()._1);
+							document.append("customer_id", object.get("customer_id"));
+							document.append("order_status", object.get("order_status"));
 							mongoHandler.insertDocument(document,"orders");
 						}
 						return null;
